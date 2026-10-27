@@ -177,10 +177,10 @@ fn run_command(args: &[String]) -> Result<(), Error> {
     let report = flags.value("report").map(PathBuf::from);
     let summary = sheeter::impose_reporting(&input, &output, &job, report.as_deref())?;
     println!(
-        "{} pages -> {} sides on {} sheets -> {}",
-        summary.pages_in,
-        summary.sides,
-        summary.sheets,
+        "{} -> {} on {} -> {}",
+        count(summary.pages_in, "page", "pages"),
+        count(summary.sides, "side", "sides"),
+        count(summary.sheets, "sheet", "sheets"),
         summary.written.display()
     );
     if summary.overflowing > 0 {
@@ -248,6 +248,15 @@ fn job_for(flags: &Flags) -> Result<Job, Error> {
         job.mirror_back = true;
     }
     Ok(job)
+}
+
+/// `1 page`, `2 pages`.
+fn count(value: usize, one: &str, many: &str) -> String {
+    if value == 1 {
+        format!("{value} {one}")
+    } else {
+        format!("{value} {many}")
+    }
 }
 
 fn parse_u32(raw: &str, name: &str) -> Result<u32, Error> {
@@ -322,10 +331,10 @@ fn watch_command(args: &[String]) -> Result<(), Error> {
             match sheeter::impose(&input, &output, &job) {
                 Ok(summary) => {
                     println!(
-                        "{} -> {} ({} sides)",
+                        "{} -> {} ({})",
                         input.file_name().unwrap_or_default().to_string_lossy(),
                         summary.written.display(),
-                        summary.sides
+                        count(summary.sides, "side", "sides")
                     );
                     if summary.overflowing > 0 {
                         eprintln!(
