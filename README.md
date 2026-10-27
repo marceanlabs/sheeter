@@ -42,7 +42,7 @@ sheeter run booklet.pdf --layout booklet --sheet a4l --duplex --creep 0.25mm -o 
 | Nothing is dropped | `scripts/check_with_poppler.sh` counts characters with `pdftotext` and requires every source page in the placement report exactly once |
 | The file is structurally valid | `qpdf --check` and `pdfinfo` report no complaints; every reference in the model is resolved before the file is written |
 | Fonts and images survive | tested on a 194-page RFC (different producer, Type1 fonts) and a LaTeX paper (embedded subset fonts), rendered and read back |
-| It is fast enough to run unattended | 194 A4 pages to a 98-side saddle-stitch booklet in 0.27 s on one core |
+| It is fast enough to run unattended | 194 A4 pages to a 98-side saddle-stitch booklet in under 0.3 s on one core |
 
 Measured on two real files from different producers: a 194-page RFC and a
 15-page LaTeX paper. In both, `pdftotext` character counts match the source
