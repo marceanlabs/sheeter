@@ -44,8 +44,9 @@ sheeter run booklet.pdf --layout booklet --sheet a4l --duplex --creep 0.25mm -o 
 | Fonts and images survive | tested on a 194-page RFC (different producer, Type1 fonts) and a LaTeX paper (embedded subset fonts), rendered and read back |
 | It is fast enough to run unattended | 194 A4 pages to a 98-side saddle-stitch booklet in 0.27 s on one core |
 
-Measured on the two files in `fixtures/`: `pdfinfo` reports 194 and 15 pages,
-`pdftotext` character counts match the source exactly.
+Measured on two real files from different producers: a 194-page RFC and a
+15-page LaTeX paper. In both, `pdftotext` character counts match the source
+exactly.
 
 ## Install
 
