@@ -1,0 +1,37 @@
+[package]
+name = "sheeter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Impose PDF pages onto press-ready sheets: n-up, saddle-stitch booklets, cut stacks, crop marks, unattended folders"
+license = "Apache-2.0"
+repository = "https://github.com/marceanlabs/sheeter"
+homepage = "https://github.com/marceanlabs/sheeter"
+documentation = "https://docs.rs/sheeter"
+readme = "README.md"
+keywords = ["pdf", "imposition", "print", "n-up", "booklet"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+lopdf = "0.46"
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+
+[dependencies.mimalloc]
+version = "0.1"
+optional = true
+
+[features]
+default = ["mimalloc-alloc"]
+mimalloc-alloc = ["dep:mimalloc"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "warn"
+wildcard_imports = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+clone_on_ref_ptr = "warn"

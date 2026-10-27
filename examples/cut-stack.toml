@@ -1,0 +1,10 @@
+# Cut stack: nine business cards per SRA3 sheet, one side, guillotine apart.
+sheet = "sra3"
+layout = "step"
+cols = 3
+rows = 3
+duplex = false
+margin = "10mm"
+gutter = "3mm"
+marks = ["crop"]
+copies = 1

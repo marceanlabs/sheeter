@@ -1,0 +1,10 @@
+# Saddle-stitch booklet: A4 landscape sheet, two A5 pages, printed both sides.
+sheet = "a4l"
+layout = "booklet"
+cols = 2
+rows = 1
+duplex = true
+margin = "8mm"
+gutter = "6mm"
+creep = "0.25mm"
+marks = ["crop"]
