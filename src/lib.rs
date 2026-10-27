@@ -84,6 +84,10 @@ pub struct Job {
     pub fit: String,
     /// Sheets produced by a `step` job.
     pub copies: u32,
+    /// Which pages to use, 1 based: `1-8,12`, empty for all.
+    pub pages: String,
+    /// Password for a protected input. An empty string tries the empty password.
+    pub password: String,
 }
 
 impl Default for Job {
@@ -102,6 +106,8 @@ impl Default for Job {
             mirror_back: false,
             fit: "fit".into(),
             copies: 1,
+            pages: String::new(),
+            password: String::new(),
         }
     }
 }
@@ -161,15 +167,7 @@ impl Job {
             spec,
             style,
             bleed: units::parse_len(&self.bleed)?,
-            fill: match self.fit.to_ascii_lowercase().as_str() {
-                "fit" | "contain" => false,
-                "fill" | "stretch" => true,
-                other => {
-                    return Err(Error::Layout(format!(
-                        "{other:?} is not a fit mode: use fit or fill"
-                    )));
-                }
-            },
+            fit: Fit::parse(&self.fit)?,
         })
     }
 }
@@ -191,6 +189,38 @@ fn marks_from(names: &[String]) -> Result<MarkStyle, Error> {
     Ok(style)
 }
 
+/// How a page is sized inside its tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Fit {
+    /// Keep the aspect ratio, scale until one side touches the tile.
+    Contain,
+    /// Stretch to the tile, distorting if the ratios differ.
+    Fill,
+    /// Print at a fixed scale, 1.0 meaning one source point per sheet point.
+    Scale(f64),
+}
+
+impl Fit {
+    pub fn parse(raw: &str) -> Result<Self, Error> {
+        let text = raw.trim().to_ascii_lowercase();
+        match text.as_str() {
+            "fit" | "contain" => Ok(Self::Contain),
+            "fill" | "stretch" => Ok(Self::Fill),
+            other => {
+                let number = other.strip_suffix('%').unwrap_or(other);
+                match number.trim().parse::<f64>() {
+                    Ok(percent) if percent > 0.0 && percent <= 10_000.0 => {
+                        Ok(Self::Scale(percent / 100.0))
+                    }
+                    _ => Err(Error::Layout(format!(
+                        "{raw:?} is not a fit mode: use fit, fill or a percentage like 100%"
+                    ))),
+                }
+            }
+        }
+    }
+}
+
 /// A job with its strings resolved.
 #[derive(Debug, Clone)]
 pub struct Prepared {
@@ -199,7 +229,7 @@ pub struct Prepared {
     pub spec: Plan,
     pub style: MarkStyle,
     pub bleed: f64,
-    pub fill: bool,
+    pub fit: Fit,
 }
 
 /// What a run produced.
@@ -209,6 +239,8 @@ pub struct Summary {
     pub sides: usize,
     pub sheets: usize,
     pub written: PathBuf,
+    /// Placements the tile cuts, because the page is bigger than its slot.
+    pub overflowing: usize,
 }
 
 /// Impose `input` into `output`.
@@ -225,25 +257,37 @@ pub fn impose_reporting(
     report: Option<&Path>,
 ) -> Result<Summary, Error> {
     let prepared = job.prepare()?;
-    let source = lopdf::Document::load(input)
-        .map_err(|err| Error::Pdf(format!("could not read {}: {err}", input.display())))?;
+    // The loader needs the password up front: a protected file's cross reference
+    // stream is encrypted too, so loading first and decrypting after loses objects.
+    let source = lopdf::Document::load_with_password(input, &job.password).map_err(|err| {
+        Error::Pdf(format!(
+            "could not read {}: {err}. If the file is password protected, pass --password",
+            input.display()
+        ))
+    })?;
+    let total = source.get_pages().len();
+    let selection = parse_pages(&job.pages, total)?;
 
     let sides;
     let pages_in;
+    let numbers;
+    let overflowing;
     {
-        let imposer = pdf::Imposer::new(&source);
+        let imposer = pdf::Imposer::new(&source, selection);
         pages_in = imposer.page_count();
+        numbers = imposer.numbers().to_vec();
         sides = layout::plan(&prepared.spec, pages_in)?;
-        imposer.write(&sides, &prepared, output)?;
+        overflowing = imposer.write(&sides, &prepared, output)?;
     }
 
     if let Some(path) = report {
         let mut text = String::from("sheet,side,slot,source_page,x_pt,y_pt,w_pt,h_pt\n");
         for side in &sides {
             for (slot, placement) in side.placements.iter().enumerate() {
-                let page = placement
-                    .page
-                    .map_or_else(|| "blank".to_string(), |index| (index + 1).to_string());
+                let page = placement.page.map_or_else(
+                    || "blank".to_string(),
+                    |index| numbers.get(index).copied().unwrap_or(0).to_string(),
+                );
                 text.push_str(&format!(
                     "{},{},{},{},{:.2},{:.2},{:.2},{:.2}\n",
                     side.sheet + 1,
@@ -270,7 +314,63 @@ pub fn impose_reporting(
         sides: sides.len(),
         sheets,
         written: output.to_path_buf(),
+        overflowing,
     })
+}
+
+/// Parse a page selection: `1-8,12`, empty for every page. 1 based, and a bare
+/// `-4` or `9-` means "from the start" or "to the end".
+pub fn parse_pages(raw: &str, total: usize) -> Result<Vec<usize>, Error> {
+    if raw.trim().is_empty() {
+        return Ok((0..total).collect());
+    }
+    let mut out = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((left, right)) => {
+                let start = if left.trim().is_empty() {
+                    1
+                } else {
+                    page_number(left, total)?
+                };
+                let end = if right.trim().is_empty() {
+                    total
+                } else {
+                    page_number(right, total)?
+                };
+                if start > end {
+                    return Err(Error::Layout(format!(
+                        "the page range {part:?} runs backwards"
+                    )));
+                }
+                out.extend((start..=end).map(|n| n - 1));
+            }
+            None => out.push(page_number(part, total)? - 1),
+        }
+    }
+    if out.is_empty() {
+        return Err(Error::Layout(format!(
+            "the page selection {raw:?} chose no pages"
+        )));
+    }
+    Ok(out)
+}
+
+fn page_number(raw: &str, total: usize) -> Result<usize, Error> {
+    let number: usize = raw
+        .trim()
+        .parse()
+        .map_err(|_| Error::Layout(format!("{raw:?} is not a page number")))?;
+    if number == 0 || number > total {
+        return Err(Error::Layout(format!(
+            "page {number} does not exist: the input has {total}"
+        )));
+    }
+    Ok(number)
 }
 
 /// Default output name beside the input: `job.pdf` becomes `job-sheets.pdf`.
@@ -282,4 +382,36 @@ pub fn default_output(input: &Path) -> PathBuf {
         .unwrap_or_else(|| "output".into());
     let parent = input.parent().unwrap_or_else(|| Path::new("."));
     parent.join(format!("{stem}-sheets.pdf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_selections_expand() {
+        assert_eq!(parse_pages("", 5).unwrap(), vec![0, 1, 2, 3, 4]);
+        assert_eq!(parse_pages("2-4", 5).unwrap(), vec![1, 2, 3]);
+        assert_eq!(parse_pages("1,3,5", 5).unwrap(), vec![0, 2, 4]);
+        assert_eq!(parse_pages("-2", 5).unwrap(), vec![0, 1]);
+        assert_eq!(parse_pages("4-", 5).unwrap(), vec![3, 4]);
+    }
+
+    #[test]
+    fn page_selections_are_checked_against_the_file() {
+        assert!(parse_pages("9", 5).is_err());
+        assert!(parse_pages("0", 5).is_err());
+        assert!(parse_pages("4-2", 5).is_err());
+        assert!(parse_pages("one", 5).is_err());
+    }
+
+    #[test]
+    fn fit_modes_parse() {
+        assert_eq!(Fit::parse("fit").unwrap(), Fit::Contain);
+        assert_eq!(Fit::parse("FILL").unwrap(), Fit::Fill);
+        assert_eq!(Fit::parse("100%").unwrap(), Fit::Scale(1.0));
+        assert_eq!(Fit::parse("85").unwrap(), Fit::Scale(0.85));
+        assert!(Fit::parse("huge").is_err());
+        assert!(Fit::parse("0%").is_err());
+    }
 }

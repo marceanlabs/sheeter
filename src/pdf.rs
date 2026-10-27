@@ -8,11 +8,11 @@ use std::collections::{HashMap, HashSet};
 
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
-use crate::Error;
 use crate::layout::{Placement, Side, Tile};
 use crate::marks::{self, MarkStyle};
 use crate::sheet::Rect;
 use crate::units::num;
+use crate::{Error, Fit};
 
 /// The box a source page shows, after inheritance and rotation.
 #[derive(Debug, Clone, Copy)]
@@ -136,24 +136,44 @@ pub struct Imposer<'a> {
     copied: HashMap<ObjectId, ObjectId>,
     forms: HashMap<usize, ObjectId>,
     boxes: HashMap<usize, PageBox>,
+    /// The source pages chosen, in output order.
     page_ids: Vec<ObjectId>,
+    /// Their original 1 based page numbers, for the report.
+    numbers: Vec<u32>,
+    /// Placements whose page is bigger than its tile, so the edges will be cut.
+    overflowing: usize,
 }
 
 impl<'a> Imposer<'a> {
-    pub fn new(src: &'a Document) -> Self {
+    /// `selection` holds 0 based source page indexes, in the order to use them.
+    pub fn new(src: &'a Document, selection: Vec<usize>) -> Self {
+        let all: Vec<ObjectId> = src.get_pages().values().copied().collect();
+        let page_ids = selection
+            .iter()
+            .filter_map(|index| all.get(*index).copied())
+            .collect();
+        let numbers = selection.iter().map(|index| (*index + 1) as u32).collect();
         Self {
             src,
             dst: Document::with_version("1.7"),
             copied: HashMap::new(),
             forms: HashMap::new(),
             boxes: HashMap::new(),
-            page_ids: src.get_pages().values().copied().collect(),
+            page_ids,
+            numbers,
+            overflowing: 0,
         }
     }
 
     #[must_use]
     pub fn page_count(&self) -> usize {
         self.page_ids.len()
+    }
+
+    /// Original page numbers, matching the placement indexes.
+    #[must_use]
+    pub fn numbers(&self) -> &[u32] {
+        &self.numbers
     }
 
     /// Copy an object graph into the output, remapping every reference. Memoised,
@@ -337,7 +357,7 @@ impl<'a> Imposer<'a> {
         style: &MarkStyle,
         area: Rect,
         bleed: f64,
-        fill: bool,
+        fit: Fit,
     ) -> Result<ObjectId, Error> {
         let mut content = String::from("q\n");
         let mut xobjects = Dictionary::new();
@@ -346,7 +366,10 @@ impl<'a> Imposer<'a> {
             let Some(index) = page else { continue };
             let form_id = self.form(*index)?;
             let page_box = self.page_box(*index)?;
-            let matrix = placement(*tile, *dx, *dy, page_box, bleed, fill);
+            let (matrix, overflow) = placement(*tile, *dx, *dy, page_box, bleed, fit);
+            if overflow {
+                self.overflowing += 1;
+            }
             let name = format!("Fm{}", form_id.0);
             xobjects.set(name.clone().into_bytes(), Object::Reference(form_id));
             content.push_str("q\n");
@@ -386,7 +409,7 @@ impl<'a> Imposer<'a> {
         sides: &[Side],
         prepared: &crate::Prepared,
         path: &std::path::Path,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         let catalog_id = self.dst.add_object(Dictionary::new());
         let pages_id = self.dst.add_object(Dictionary::new());
 
@@ -398,7 +421,7 @@ impl<'a> Imposer<'a> {
                 &prepared.style,
                 prepared.area,
                 prepared.bleed,
-                prepared.fill,
+                prepared.fit,
             )?;
             if let Ok(Object::Dictionary(dict)) = self.dst.get_object_mut(page_id) {
                 dict.set("Parent", Object::Reference(pages_id));
@@ -423,7 +446,7 @@ impl<'a> Imposer<'a> {
         self.dst
             .save(path)
             .map_err(|err| Error::Pdf(format!("could not write {}: {err}", path.display())))?;
-        Ok(())
+        Ok(self.overflowing)
     }
 
     /// Every reference in the output must land on an object. Cheap, and it turns
@@ -479,24 +502,29 @@ fn collect_refs(object: &Object, out: &mut Vec<ObjectId>, depth: usize) {
     }
 }
 
-/// Where one page goes: fit it into the tile (plus bleed), then nudge.
-fn placement(tile: Tile, dx: f64, dy: f64, page: PageBox, bleed: f64, fill: bool) -> Mat {
+/// Where one page goes: size it for the tile (plus bleed), then nudge. The flag
+/// says the page came out bigger than its tile, so its edges will be trimmed off.
+fn placement(tile: Tile, dx: f64, dy: f64, page: PageBox, bleed: f64, fit: Fit) -> (Mat, bool) {
     let (shown_w, shown_h) = page.shown();
     let box_w = tile.w + 2.0 * bleed;
     let box_h = tile.h + 2.0 * bleed;
-    let (mut sx, mut sy) = (box_w / shown_w, box_h / shown_h);
-    if !fill {
-        let scale = sx.min(sy);
-        sx = scale;
-        sy = scale;
-    }
+    let (sx, sy) = match fit {
+        Fit::Contain => {
+            let scale = (box_w / shown_w).min(box_h / shown_h);
+            (scale, scale)
+        }
+        Fit::Fill => (box_w / shown_w, box_h / shown_h),
+        Fit::Scale(scale) => (scale, scale),
+    };
     let draw_w = shown_w * sx;
     let draw_h = shown_h * sy;
     let ox = tile.x - bleed + (box_w - draw_w) / 2.0 + dx;
     let oy = tile.y - bleed + (box_h - draw_h) / 2.0 + dy;
-    Mat::translate(ox, oy)
+    let overflow = draw_w > box_w + 0.5 || draw_h > box_h + 0.5;
+    let matrix = Mat::translate(ox, oy)
         .then(Mat::scale(sx, sy))
-        .then(unrotate(page.rotate, page.width, page.height))
+        .then(unrotate(page.rotate, page.width, page.height));
+    (matrix, overflow)
 }
 
 fn rect_of(object: &Object) -> Option<[f64; 4]> {
@@ -562,7 +590,8 @@ mod tests {
             height: 100.0,
             rotate: 0,
         };
-        let m = placement(tile, 0.0, 0.0, page, 0.0, false);
+        let (m, overflow) = placement(tile, 0.0, 0.0, page, 0.0, Fit::Contain);
+        assert!(!overflow);
         // Scale is 0.5, so the drawn page is 100x50 and sits 75 points up.
         assert!((m.a - 0.5).abs() < 1e-9);
         assert!((m.f - 75.0).abs() < 1e-9);

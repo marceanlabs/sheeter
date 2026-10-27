@@ -199,7 +199,11 @@ fn duplex_nup_uses_a_fresh_block_on_the_back() {
     assert_eq!(summary.sheets, 2);
     let mut seen: Vec<u32> = side_contents(&output).into_iter().flatten().collect();
     seen.sort_unstable();
-    assert_eq!(seen, (1..=16).collect::<Vec<u32>>(), "every page exactly once");
+    assert_eq!(
+        seen,
+        (1..=16).collect::<Vec<u32>>(),
+        "every page exactly once"
+    );
 }
 
 #[test]

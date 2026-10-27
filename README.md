@@ -29,6 +29,12 @@ sheeter run booklet.pdf --layout booklet --sheet a4l --duplex --creep 0.25mm -o 
   printing marks off the edge of the sheet.
 - **hot folder**: `sheeter watch` polls a directory and imposes every PDF that
   lands in it.
+- **page selection**: `--pages 1-8,12` imposes part of a file, so a job does not
+  need a second tool to strip a cover or a blank back.
+- **protected files**: `--password` opens an encrypted input; without it, the
+  error says the file is protected instead of pretending there are no pages.
+- **true size**: `--fit 100%` places pages at one point per point, centred,
+  instead of scaling them to fill the tile.
 - **placement report**: `--report job.csv` writes which source page went to
   which sheet, side and tile, so a job can be checked without opening the file.
 - Job files in TOML, so a shop can keep one per product and hand it to a
@@ -83,6 +89,8 @@ like `320x450` or `12x18in`.
 - No spot colours, no ink control, no preflight. It imposes pages; it does not
   judge them.
 - No PDF/X or PDF/A output.
+- No automatic numbering or variable data. It will not add folios, bates stamps
+  or ticket numbers; those come in the artwork.
 - No imposition of mixed page sizes on one sheet beyond fitting each page to its
   own tile.
 - Does not touch the source: it is read, never modified.

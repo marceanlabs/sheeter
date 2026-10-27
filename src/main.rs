@@ -28,6 +28,8 @@ OPTIONS
       --marks <list>    crop, reg or none, comma separated
       --fit <mode>      fit (keep aspect) or fill (stretch)
       --copies <n>      sheets a step job produces
+      --pages <list>    which pages to use, 1 based: 1-8,12
+      --password <pw>   password for a protected input
       --report <file>   write the placement map as CSV
       --duplex          two sides per sheet
       --mirror-back     mirror back sides for long-edge flipping
@@ -151,7 +153,7 @@ impl Flags {
 
 const VALUE_OPTIONS: &[&str] = &[
     "out", "job", "sheet", "layout", "cols", "rows", "margin", "gutter", "bleed", "creep", "marks",
-    "fit", "copies", "in", "every", "report",
+    "fit", "copies", "in", "every", "report", "pages", "password",
 ];
 const SWITCHES: &[&str] = &["duplex", "mirror-back", "once", "help", "version"];
 
@@ -181,6 +183,12 @@ fn run_command(args: &[String]) -> Result<(), Error> {
         summary.sheets,
         summary.written.display()
     );
+    if summary.overflowing > 0 {
+        eprintln!(
+            "warning: {} placed pages are larger than their tile and will be trimmed at the edge; check the scale",
+            summary.overflowing
+        );
+    }
     Ok(())
 }
 
@@ -219,6 +227,12 @@ fn job_for(flags: &Flags) -> Result<Job, Error> {
     }
     if let Some(value) = flags.value("copies") {
         job.copies = parse_u32(value, "copies")?;
+    }
+    if let Some(value) = flags.value("pages") {
+        job.pages = value.to_string();
+    }
+    if let Some(value) = flags.value("password") {
+        job.password = value.to_string();
     }
     if let Some(value) = flags.value("marks") {
         job.marks = value
@@ -306,12 +320,20 @@ fn watch_command(args: &[String]) -> Result<(), Error> {
                 continue;
             }
             match sheeter::impose(&input, &output, &job) {
-                Ok(summary) => println!(
-                    "{} -> {} ({} sides)",
-                    input.file_name().unwrap_or_default().to_string_lossy(),
-                    summary.written.display(),
-                    summary.sides
-                ),
+                Ok(summary) => {
+                    println!(
+                        "{} -> {} ({} sides)",
+                        input.file_name().unwrap_or_default().to_string_lossy(),
+                        summary.written.display(),
+                        summary.sides
+                    );
+                    if summary.overflowing > 0 {
+                        eprintln!(
+                            "warning: {} placed pages are larger than their tile and will be trimmed",
+                            summary.overflowing
+                        );
+                    }
+                }
                 Err(err) => eprintln!("{}: {err}", input.display()),
             }
         }
