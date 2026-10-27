@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # First of the month: prove the crate still builds against current
+    # dependencies, without waiting for a bug report.
+    - cron: "0 6 1 * *"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+      - name: Impose a real file and check it with an independent reader
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils qpdf
+          cargo build --release
+          curl -sSL --max-time 120 -o sample.pdf https://www.rfc-editor.org/rfc/rfc9110.pdf
+          ./target/release/sheeter run sample.pdf \
+            --layout booklet --sheet a4l --duplex --marks crop \
+            --margin 8mm --gutter 6mm \
+            -o out.pdf --report out.csv
+          ./scripts/check_with_poppler.sh sample.pdf out.pdf out.csv
+      - name: A fresh lockfile still passes
+        if: github.event_name == 'schedule'
+        run: |
+          cargo update
+          cargo test
+          cargo build --release
+          ./target/release/sheeter run sample.pdf --layout step --cols 3 --rows 3 \
+            -o out2.pdf --report out2.csv
+          ./scripts/check_with_poppler.sh sample.pdf out2.pdf out2.csv
