@@ -36,4 +36,4 @@ Impose PDF pages onto press-ready sheets. Rust, lopdf, no unsafe.
 ## Next, if it earns it
 
 - `sheeter watch` has no retry queue: a file that fails is reported and skipped.
-- Price and packaging are unproven. See `/root/work/rust-tool-hunt/shortlist.md`.
+- Price and packaging are unproven. See `/Users/adam/work/rust-tool-hunt/shortlist.md`.
